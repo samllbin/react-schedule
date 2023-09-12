@@ -11,6 +11,18 @@ import {
   Callback,
 } from "./scheduler";
 
+type PriorityLevel = 0 | 1 | 2 | 3 | 4 | 5;
+
+type Task = {
+  id: number;
+  callback: Callback | null;
+  priorityLevel: PriorityLevel;
+  startTime: number;
+  expirationTime: number;
+  sortIndex: number;
+  isQueued?: boolean;
+};
+
 type Priority =
   | typeof IdlePriority
   | typeof ImmediatePriority
@@ -23,16 +35,9 @@ interface Work {
   count: number;
 }
 
-const priorityList: Priority[] = [
-  ImmediatePriority,
-  UserBlockingPriority,
-  NormalPriority,
-  LowPriority,
-];
-
 const workList: Work[] = [];
 let prevPriority: Priority = IdlePriority; //正在执行的work的优先级，默认为最低优先级
-let curCallback: Callback | null;
+let curCallback: null | Task;
 
 function schedule() {
   //取出当前可能正在执行的回调
@@ -66,4 +71,35 @@ function schedule() {
   curCallback = scheduleCallback(curPriority, perform.bind(null, curWork));
 }
 
-function perform(work: Work, didTimeout?: boolean): any {}
+function perform(work: Work, didTimeout?: boolean): any {
+  //是否需要同步执行
+  //满足work是同步优先级，当前调度的任务已经过期需要同步执行
+  const needSync = work.priority === ImmediatePriority || didTimeout;
+  while ((needSync || !shouldYield()) && work.count) {
+    //当scheduler预留的5ms时间不够时，shouldYield就会变成true，导致循环中断
+    work.count--;
+    //执行需要的工作
+  }
+
+  prevPriority = work.priority;
+
+  if (!work.count) {
+    //从workList中删除已经执行完的work
+    const WorkIndex = workList.indexOf(work);
+    workList.splice(WorkIndex, 1);
+
+    //重置优先级
+    prevPriority = IdlePriority;
+  }
+
+  const prevCallback = curCallback;
+  schedule();
+  const newCallback = curCallback;
+
+  //调度完成后，如果callback发生变化代表是新work，如果不是则是同一个work
+  if (newCallback && prevCallback === newCallback) {
+    //同一个work，被时间切片
+    //返回的函数会被scheduler继续调用
+    return perform.bind(null, work);
+  }
+}
